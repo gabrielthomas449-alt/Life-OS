@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gabe OS</title>
+<meta name="description" content="Gabe OS — a personal AI-powered life operating system.">
+<meta name="theme-color" content="#04205e">
+<meta name="color-scheme" content="dark">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gabe OS">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira:wght@300;400;500;600&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+
+<canvas id="bg" aria-hidden="true"></canvas>
+
+<section id="ambient" class="layer" role="button" tabindex="0" aria-label="Enter Gabe OS">
+  <div class="amb-note" id="ambNote"><span class="pulse"></span><span id="ambNoteText">1 reminder tonight</span></div>
+  <div class="amb-info" id="ambInfo"><div class="amb-time" id="ambTime">9:23</div><div class="amb-date" id="ambDate">Thursday, October 22</div></div>
+  <div class="amb-hint">Tap the wave</div>
+</section>
+
+<section id="menu" class="layer" hidden aria-label="Modules">
+  <div class="topbar"><div class="brand"><b>Gabe OS</b></div><div class="clock" id="menuClock"></div></div>
+  <div class="stage" id="stage">
+    <div class="ring" id="ring"></div>
+    <div class="sel-info"><div class="sel-name" id="selName">Today</div><div class="sel-sub" id="selSub"></div><div class="keys" id="keys">Swipe or ← → · Tap to open · Esc for ambient</div></div>
+  </div>
+</section>
+
+<section id="ws" class="layer" hidden>
+  <div class="ws-wrap">
+    <nav class="rail" id="rail" aria-label="Modules"></nav>
+    <main class="ws-main">
+      <header class="ws-head"><div class="ws-icon" id="wsIcon"></div><div><h1 id="wsTitle">Today</h1><p id="wsSub"></p></div><div class="spacer"></div><span class="sample" id="wsSample" hidden>Sample data</span></header>
+      <div class="grid" id="grid"></div>
+    </main>
+  </div>
+</section>
+
+<div id="console" hidden role="status" aria-live="polite"></div>
+<form id="dock" hidden autocomplete="off">
+  <svg class="spark" viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 1.8 1.8.7-1.8.7L19 20l-.7-1.8-1.8-.7 1.8-.7z"/></svg>
+  <input id="ask" type="text" placeholder="Ask Gabe OS anything…" aria-label="Ask Gabe OS">
+  <button id="send" type="submit" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
+</form>
+<div id="toast" hidden role="alert"></div>
+
+<div id="login" hidden>
+  <form class="login-card" id="loginForm" autocomplete="on">
+    <div class="brandmark">Gabe OS</div>
+    <h1 id="loginTitle">Welcome back</h1>
+    <p id="loginSub">Enter your passcode to open Gabe OS.</p>
+    <input type="text" name="username" value="gabe" autocomplete="username" hidden>
+    <input class="field" id="passcode" type="password" required minlength="6" placeholder="Passcode" aria-label="Passcode">
+    <button class="btn primary" id="loginBtn" type="submit">Sign in</button>
+    <div id="loginMsg" role="alert"></div>
+  </form>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
