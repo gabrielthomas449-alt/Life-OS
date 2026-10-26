@@ -1,5 +1,6 @@
 // Gabe OS API — Cloudflare Worker + D1
 // Static files in /public are served by Workers Assets; this handles /api/*.
+import { assist, MODELS, DEFAULT_MODEL, validModel } from './assist.js';
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
@@ -9,6 +10,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, text TEXT NOT NULL, created_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS habits (id TEXT PRIMARY KEY, name TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, kind TEXT, sub TEXT, sort INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY AUTOINCREMENT, q TEXT NOT NULL, a TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS routine_checks (day TEXT NOT NULL, item TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (day, item))`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due)`,
   `CREATE INDEX IF NOT EXISTS idx_events_day ON events(day)`,
 ];
@@ -60,6 +62,47 @@ async function seed(env) {
   S.push(env.DB.prepare(`INSERT OR REPLACE INTO meta (key,value) VALUES ('settings', ?)`).bind(JSON.stringify({ clock: true, notify: true })));
   S.push(env.DB.prepare(`INSERT OR REPLACE INTO meta (key,value) VALUES ('seeded', '1')`));
   await env.DB.batch(S);
+}
+
+// ---------- Skin routine ----------
+// days: weekdays the step applies (0=Sun..6=Sat); null = every day. paused: shown but not counted.
+const DEFAULT_ROUTINE = {
+  started: null,
+  am: [
+    { id: 'am-wash', text: 'Wash face', detail: 'CeraVe Face Wash', days: null, paused: false },
+    { id: 'am-eye', text: 'Caffeine eye cream', detail: 'CeraVe — small amount under both eyes', days: null, paused: false },
+    { id: 'am-moist', text: 'Face moisturizer', detail: '', days: null, paused: false },
+    { id: 'am-spf', text: 'SPF 30–50 sunscreen', detail: 'Once you buy one', days: null, paused: true },
+  ],
+  pm: [
+    { id: 'pm-wash', text: 'Wash face', detail: 'CeraVe Face Wash', days: null, paused: false },
+    { id: 'pm-dry', text: 'Let face fully dry', detail: '', days: null, paused: false },
+    { id: 'pm-adapalene', text: 'Adapalene 0.1%', detail: 'Thin layer on nose / blackhead area', days: [1, 3, 5], paused: false },
+    { id: 'pm-retinol', text: 'RoC Retinol Eye Cream', detail: 'Tiny amount around under-eye / orbital area', days: [2, 4, 6], paused: false },
+    { id: 'pm-moist', text: 'Face moisturizer', detail: '', days: null, paused: false },
+  ],
+  holds: [
+    { id: 'hold-sa', text: '2% salicylic acid', detail: 'Left out while your skin adjusts. After about 2–4 weeks, if there is no redness or peeling, decide whether to add it back.', reviewAfterDays: 14 },
+  ],
+};
+function cleanRoutine(r) {
+  const step = (x, i, p) => ({
+    id: typeof x.id === 'string' && /^[\w-]{1,40}$/.test(x.id) ? x.id : `${p}-${i}-${Date.now().toString(36)}`,
+    text: str(x.text, 80) || 'Step',
+    detail: str(x.detail, 200),
+    days: Array.isArray(x.days) ? [...new Set(x.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort() : null,
+    paused: !!x.paused,
+  });
+  return {
+    started: isDay(r.started) ? r.started : null,
+    am: (Array.isArray(r.am) ? r.am : []).slice(0, 20).map((x, i) => step(x, i, 'am')),
+    pm: (Array.isArray(r.pm) ? r.pm : []).slice(0, 20).map((x, i) => step(x, i, 'pm')),
+    holds: (Array.isArray(r.holds) ? r.holds : []).slice(0, 10).map((h, i) => ({ id: str(h.id, 40) || `hold-${i}`, text: str(h.text, 80), detail: str(h.detail, 300), reviewAfterDays: Number.isInteger(h.reviewAfterDays) ? h.reviewAfterDays : 14 })),
+  };
+}
+async function getRoutine(env) {
+  const r = await env.DB.prepare(`SELECT value FROM meta WHERE key='routine'`).first();
+  return r ? JSON.parse(r.value) : JSON.parse(JSON.stringify(DEFAULT_ROUTINE));
 }
 
 // ---------- Auth ----------
@@ -149,13 +192,15 @@ const mapEvent = (r) => ({ id: r.id, title: r.title, min: r.start_min, day: r.da
 const mapNote = (r) => ({ id: r.id, text: r.text, at: r.created_at });
 
 async function state(env) {
-  const [ev, tk, nt, hb, st, lg] = await env.DB.batch([
+  const since = new Date(now() - 60 * 864e5).toISOString().slice(0, 10);
+  const [ev, tk, nt, hb, st, lg, rc] = await env.DB.batch([
     env.DB.prepare(`SELECT * FROM events ORDER BY start_min`),
     env.DB.prepare(`SELECT * FROM tasks WHERE done=0 OR done_at > ? ORDER BY created_at`).bind(now() - 30 * 864e5),
     env.DB.prepare(`SELECT * FROM notes ORDER BY created_at DESC LIMIT 200`),
     env.DB.prepare(`SELECT * FROM habits ORDER BY sort`),
     env.DB.prepare(`SELECT value FROM meta WHERE key='settings'`),
     env.DB.prepare(`SELECT q,a,created_at FROM log ORDER BY id DESC LIMIT 40`),
+    env.DB.prepare(`SELECT day,item FROM routine_checks WHERE day >= ?`).bind(since),
   ]);
   return {
     events: ev.results.map(mapEvent),
@@ -164,6 +209,8 @@ async function state(env) {
     habits: hb.results.map((r) => ({ id: r.id, name: r.name, v: r.value, kind: r.kind, sub: r.sub })),
     settings: st.results[0] ? JSON.parse(st.results[0].value) : { clock: true, notify: true },
     log: lg.results.reverse().map((r) => ({ q: r.q, a: r.a, at: r.created_at })),
+    routine: await getRoutine(env),
+    checks: rc.results.map((r) => r.day + '|' + r.item),
   };
 }
 
@@ -174,6 +221,12 @@ async function dataRoutes(req, env, path) {
   const body = m === 'GET' || m === 'DELETE' ? {} : await req.json().catch(() => ({}));
 
   if (kind === 'state' && m === 'GET') return json(await state(env));
+
+  if (kind === 'ai' && id === 'status' && m === 'GET') {
+    const st = await env.DB.prepare(`SELECT value FROM meta WHERE key='settings'`).first();
+    const model = (st && JSON.parse(st.value).model) || env.ROTEO_MODEL || DEFAULT_MODEL;
+    return json({ connected: !!env.ROTEO_API_KEY, model, models: MODELS });
+  }
 
   if (kind === 'tasks') {
     if (m === 'POST' && !id) {
@@ -235,11 +288,58 @@ async function dataRoutes(req, env, path) {
       await env.DB.prepare(`INSERT INTO notes (id,text,created_at) VALUES (?,?,?)`).bind(r.id, r.text, r.created_at).run();
       return json(mapNote(r), 201);
     }
+    if (m === 'PATCH' && id) {
+      const text = str(body.text, 4000);
+      if (!text) return err(400, 'A note needs some text.');
+      await env.DB.prepare(`UPDATE notes SET text=? WHERE id=?`).bind(text, id).run();
+      const r = await env.DB.prepare(`SELECT * FROM notes WHERE id=?`).bind(id).first();
+      return r ? json(mapNote(r)) : err(404, 'Note not found.');
+    }
     if (m === 'DELETE' && id) { await env.DB.prepare(`DELETE FROM notes WHERE id=?`).bind(id).run(); return json({ ok: true }); }
+  }
+
+  if (kind === 'habits') {
+    const kindOk = (k) => (k === 'ok' || k === 'warn' ? k : null);
+    const pct = (v) => Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+    const mapH = (r) => ({ id: r.id, name: r.name, v: r.value, kind: r.kind, sub: r.sub });
+    if (m === 'POST' && !id) {
+      const name = str(body.name, 80);
+      if (!name) return err(400, 'A habit needs a name.');
+      const max = await env.DB.prepare(`SELECT COALESCE(MAX(sort),0) AS s FROM habits`).first();
+      const r = { id: uid(), name, value: pct(body.v), kind: kindOk(body.kind), sub: str(body.sub, 60) || null, sort: (max ? max.s : 0) + 1 };
+      await env.DB.prepare(`INSERT INTO habits (id,name,value,kind,sub,sort) VALUES (?,?,?,?,?,?)`).bind(r.id, r.name, r.value, r.kind, r.sub, r.sort).run();
+      return json(mapH(r), 201);
+    }
+    if (m === 'PATCH' && id) {
+      const cur = await env.DB.prepare(`SELECT * FROM habits WHERE id=?`).bind(id).first();
+      if (!cur) return err(404, 'Habit not found.');
+      const next = {
+        name: body.name !== undefined ? str(body.name, 80) || cur.name : cur.name,
+        value: body.v !== undefined ? pct(body.v) : cur.value,
+        kind: body.kind !== undefined ? kindOk(body.kind) : cur.kind,
+        sub: body.sub !== undefined ? str(body.sub, 60) || null : cur.sub,
+      };
+      await env.DB.prepare(`UPDATE habits SET name=?,value=?,kind=?,sub=? WHERE id=?`).bind(next.name, next.value, next.kind, next.sub, id).run();
+      return json(mapH({ ...cur, ...next }));
+    }
+    if (m === 'DELETE' && id) { await env.DB.prepare(`DELETE FROM habits WHERE id=?`).bind(id).run(); return json({ ok: true }); }
+  }
+
+  if (kind === 'routine' && m === 'PUT' && !id) {
+    const r = cleanRoutine(body);
+    await env.DB.prepare(`INSERT OR REPLACE INTO meta (key,value) VALUES ('routine',?)`).bind(JSON.stringify(r)).run();
+    return json(r);
+  }
+  if (kind === 'routine' && id === 'check' && m === 'POST') {
+    if (!isDay(body.day) || typeof body.item !== 'string' || body.item.length > 40) return err(400, 'Need a day and an item.');
+    if (body.done) await env.DB.prepare(`INSERT OR REPLACE INTO routine_checks (day,item,at) VALUES (?,?,?)`).bind(body.day, body.item, now()).run();
+    else await env.DB.prepare(`DELETE FROM routine_checks WHERE day=? AND item=?`).bind(body.day, body.item).run();
+    return json({ ok: true });
   }
 
   if (kind === 'settings' && m === 'PUT') {
     const s = { clock: !!body.clock, notify: !!body.notify };
+    if (validModel(body.model)) s.model = body.model;
     await env.DB.prepare(`INSERT OR REPLACE INTO meta (key,value) VALUES ('settings',?)`).bind(JSON.stringify(s)).run();
     return json(s);
   }
@@ -272,6 +372,13 @@ export default {
       if (path.startsWith('/api/auth/')) return await authRoutes(req, env, path);
       if (path === '/api/health') return json({ ok: true });
       if (!(await authed(req, env))) return err(401, 'Sign in to continue.');
+      if (path === '/api/assist' && req.method === 'POST') {
+        const r = await assist(req, env, async () => {
+          const st = await env.DB.prepare(`SELECT value FROM meta WHERE key='settings'`).first();
+          return st ? JSON.parse(st.value) : {};
+        });
+        return json(r.body, r.status);
+      }
       return await dataRoutes(req, env, path);
     } catch (e) {
       console.error(e);
